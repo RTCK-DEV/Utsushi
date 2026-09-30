@@ -65,12 +65,8 @@ struct SummaryPanel: View {
     private func row(_ p: Summary.Point) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(p.kind.displayName)
-                    .font(.caption2).padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(color(p.kind).opacity(0.18), in: Capsule())
-                    .foregroundStyle(color(p.kind))
-                Text(Exporter.hms(p.start))
-                    .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                CapsuleBadge(verbatim: p.kind.displayName, color: color(p.kind), foreground: color(p.kind))
+                TimestampLabel(seconds: p.start)
                 Text(p.headline).font(.headline).textSelection(.enabled)
                 if p.headlineSource == .extracted {
                     Image(systemName: "text.quote")

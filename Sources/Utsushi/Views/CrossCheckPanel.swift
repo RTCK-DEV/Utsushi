@@ -41,22 +41,21 @@ struct CrossCheckPanel: View {
                 .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
 
             let o = report.outcome
-            VStack(alignment: .leading, spacing: 3) {
-                row("食い違い（全件）", "\(report.disagreements.count)")
-                row("　中身の違い", "\(substantive.count)")
-                row("　整列のずれ（本文は両方にある）", "\(count(.alignment))")
-                row("　語尾・助詞のゆれ（と / って）", "\(count(.inflection))")
-                row("　表記だけの違い（三月 / 3月）", "\(count(.notation))")
-                Divider().padding(.vertical, 2)
-                row("判定できた", "\(o.decided)")
-                row("　うち読みが一致（同音異義語）", "\(o.decidedWithMatchingReadings)")
-                row("　うち読みが不一致（音響情報を無視した推定）", "\(o.decidedWithDifferentReadings)")
-                row("人の目が要る", "\(max(0, o.undecided - o.skipped))")
-                row("2回の判定が割れた", "\(o.disagreedBetweenSamples)")
-                row("判定エラー", "\(o.errors)")
-            }
-            .padding(10)
-            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            StatRows([
+                ("食い違い（全件）", "\(report.disagreements.count)"),
+                ("　中身の違い", "\(substantive.count)"),
+                ("　整列のずれ（本文は両方にある）", "\(count(.alignment))"),
+                ("　語尾・助詞のゆれ（と / って）", "\(count(.inflection))"),
+                ("　表記だけの違い（三月 / 3月）", "\(count(.notation))"),
+            ])
+            StatRows([
+                ("判定できた", "\(o.decided)"),
+                ("　うち読みが一致（同音異義語）", "\(o.decidedWithMatchingReadings)"),
+                ("　うち読みが不一致（音響情報を無視した推定）", "\(o.decidedWithDifferentReadings)"),
+                ("人の目が要る", "\(max(0, o.undecided - o.skipped))"),
+                ("2回の判定が割れた", "\(o.disagreedBetweenSamples)"),
+                ("判定エラー", "\(o.errors)"),
+            ])
 
             if o.decidedWithDifferentReadings > 0 {
                 Label("読みが違う判定は音響情報を使っていないため、確度が落ちます。",
@@ -66,21 +65,17 @@ struct CrossCheckPanel: View {
         }
     }
 
-    static func kindLabel(_ kind: TranscriptAlignment.Kind) -> String? {
+    static func kindLabel(_ kind: TranscriptAlignment.Kind) -> LocalizedStringKey? {
         switch kind {
         case .substantive: return nil
-        case .notation:    return String(localized: "表記だけ")
-        case .alignment:   return String(localized: "整列のずれ")
-        case .inflection:  return String(localized: "語尾のゆれ")
+        case .notation:    return "表記だけ"
+        case .alignment:   return "整列のずれ"
+        case .inflection:  return "語尾のゆれ"
         }
     }
 
-    private func row(_ k: String, _ v: String) -> some View {
-        HStack {
-            Text(LocalizedStringKey(k)).font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Text(v).font(.system(.caption, design: .monospaced))
-        }
+    private func candidateText(_ text: String) -> Text {
+        text.isEmpty ? Text("（なし）") : Text(text)
     }
 
     private var list: some View {
@@ -103,17 +98,13 @@ struct CrossCheckPanel: View {
                 let verdict = report.adjudications.first { $0.disagreementID == d.id }
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
-                        Text(Exporter.hms(d.start))
-                            .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                        Text(LocalizedStringKey(d.readingsMatch ? "読み一致" : "読み不一致"))
-                            .font(.caption2)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background((d.readingsMatch ? Color.blue : Color.orange).opacity(0.15),
-                                        in: Capsule())
+                        TimestampLabel(seconds: d.start)
+                        CapsuleBadge(
+                            label: d.readingsMatch
+                                ? LocalizedStringKey("読み一致") : LocalizedStringKey("読み不一致"),
+                            color: d.readingsMatch ? .blue : .orange)
                         if let label = Self.kindLabel(d.kind) {
-                            Text(label).font(.caption2)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Color.secondary.opacity(0.15), in: Capsule())
+                            CapsuleBadge(label: label, color: .secondary)
                         }
                         Spacer()
                         if !d.kind.needsHumanReview {
@@ -132,7 +123,8 @@ struct CrossCheckPanel: View {
                             Text(c.engine)
                                 .font(.caption2).foregroundStyle(.secondary)
                                 .frame(width: 130, alignment: .leading)
-                            Text(c.text.isEmpty ? String(localized: "（なし）") : c.text)
+                            // c.text は認識本文なので verbatim。空のときだけ訳した置き場を出す。
+                            candidateText(c.text)
                                 .fontWeight(verdict?.chosenText == c.text ? .semibold : .regular)
                                 .textSelection(.enabled)
                         }
@@ -143,8 +135,7 @@ struct CrossCheckPanel: View {
                             .lineLimit(2)
                     }
                 }
-                .padding(10)
-                .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                .cardBackground()
             }
         }
     }

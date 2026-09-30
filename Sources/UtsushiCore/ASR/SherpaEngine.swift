@@ -12,7 +12,9 @@ public actor SherpaEngine: ASREngine {
     public nonisolated var displayName: String { "sherpa-onnx (\(model.displayName))" }
     public nonisolated let supportsVAD = false
     public nonisolated let exposesConfidence = false
-    public nonisolated let supportsVocabularyHint = false
+    /// hotwords が効くのは transducer（modified_beam_search）だけ。
+    /// CTC/SenseVoice/Qwen3 では捨てられるので受け付けないと申告する。
+    public nonisolated var supportsVocabularyHint: Bool { model.engine == .sherpaTransducer }
 
     public struct Options: Sendable {
         public var threads: Int32 = 6
@@ -27,7 +29,7 @@ public actor SherpaEngine: ASREngine {
 
     private let model: ModelCatalog.Model
     private let options: Options
-    private nonisolated let holder = SherpaRecognizerBox()
+    private nonisolated let holder = NativeObjectBox(destroy: { SherpaOnnxDestroyOfflineRecognizer($0) })
 
     public init(model: ModelCatalog.Model, options: Options = Options()) {
         self.model = model
@@ -38,16 +40,16 @@ public actor SherpaEngine: ASREngine {
     public nonisolated var isLoaded: Bool { holder.pointer != nil }
 
     public func prepare(progress: @escaping @Sendable (String, Double) -> Void) async throws {
-        progress("モデルを確認中", 0)
+        progress(String(localized: "モデルを確認中"), 0)
         let needsDownload = !ModelCatalog.isInstalled(model)
         let label = needsDownload
-            ? "\(model.displayName) をダウンロード中（\(ModelCatalog.sizeText(model.approximateBytes))・初回のみ）"
-            : "モデルを確認中"
+            ? String(localized: "\(model.displayName) をダウンロード中（\(ModelCatalog.sizeText(model.approximateBytes))・初回のみ）")
+            : String(localized: "モデルを確認中")
         if needsDownload { progress(label, 0.01) }
         _ = try await ModelCatalog.install(model) { p in progress(label, max(0.01, p * 0.95)) }
 
-        guard holder.pointer == nil else { progress("準備完了", 1.0); return }
-        progress("モデルを読み込み中", 0.96)
+        guard holder.pointer == nil else { progress(String(localized: "準備完了"), 1.0); return }
+        progress(String(localized: "モデルを読み込み中"), 0.96)
 
         // Qwen3-ASR は tokens.txt を使わず tokenizer ディレクトリを取る。
         // 他のエンジンでは従来どおり必須。
@@ -60,9 +62,13 @@ public actor SherpaEngine: ASREngine {
             throw ASRError.modelUnavailable("tokens.txt が見つからない")
         }
 
+        // hotwords は transducer の modified_beam_search でしか掛からないので、
+        // transducer だけデコード法を切り替える。語彙ヒントが来ない実行でも
+        // modified_beam_search は決定的で、出力が大きく変わることは無い。
+        let method = model.engine == .sherpaTransducer ? "modified_beam_search" : "greedy_search"
         let recognizer: OpaquePointer? = try tokens.withCString { tokensPtr in
             try "cpu".withCString { providerPtr in
-                try "greedy_search".withCString { methodPtr in
+                try method.withCString { methodPtr in
                     var config = SherpaOnnxOfflineRecognizerConfig()
                     config.feat_config.sample_rate = Int32(AudioExtractor.sampleRate)
                     config.feat_config.feature_dim = 80
@@ -72,6 +78,8 @@ public actor SherpaEngine: ASREngine {
                     config.model_config.provider = providerPtr
                     config.decoding_method = methodPtr
                     config.max_active_paths = 4
+                    // hotwords を採用したとき1トークンあたりに足すボーナス。
+                    config.hotwords_score = 1.5
 
                     switch model.engine {
                     case .sherpaTransducer:
@@ -165,15 +173,17 @@ public actor SherpaEngine: ASREngine {
             throw ASRError.modelUnavailable("SherpaOnnxCreateOfflineRecognizer が nil を返した")
         }
         holder.set(recognizer)
-        progress("準備完了", 1.0)
+        progress(String(localized: "準備完了"), 1.0)
     }
 
     public func transcribe(_ request: ASRRequest,
                            progress: @escaping @Sendable (Double) -> Void,
                            isCancelled: @escaping @Sendable () -> Bool) async throws -> [Segment] {
-        guard let recognizer = holder.pointer else {
+        // デコード中に shutdown() が recognizer を destroy しないよう使用中にする
+        guard let recognizer = holder.acquire() else {
             throw ASRError.engineFailed("prepare() が呼ばれていない")
         }
+        defer { holder.release() }
         let sr = AudioExtractor.sampleRate
         let all = request.samples
         guard !all.isEmpty else { return [] }
@@ -190,6 +200,17 @@ public actor SherpaEngine: ASREngine {
         let chunks = Self.chunk(samples, sampleRate: sr,
                                 maxSeconds: options.maxChunkSeconds,
                                 silenceRatio: options.silenceRatio)
+        // sherpa の hotwords は1行1語（任意で「 :スコア」）のテキスト。
+        // WithHotwords は transducer 以外だと SHERPA_ONNX_EXIT でプロセスごと
+        // 落ちるのでここでも弾く（パイプライン側も supportsVocabularyHint で
+        // 弾いているが防御）。語の中の改行や「/」はフォーマットを壊すので潰す。
+        let terms = request.vocabularyTerms.map {
+            $0.replacingOccurrences(of: "/", with: "／")
+              .replacingOccurrences(of: "\n", with: " ")
+              .trimmingCharacters(in: .whitespaces)
+        }.filter { !$0.isEmpty }
+        let hotwords = model.engine == .sherpaTransducer && !terms.isEmpty
+            ? terms.joined(separator: "\n") : nil
         var out: [Segment] = []
         for (index, chunk) in chunks.enumerated() {
             if isCancelled() { throw ASRError.cancelled }
@@ -197,7 +218,8 @@ public actor SherpaEngine: ASREngine {
             let segs = try Self.decode(recognizer: recognizer,
                                        samples: Array(samples[chunk.start..<chunk.end]),
                                        sampleRate: Int32(sr),
-                                       startOffset: chunkStart)
+                                       startOffset: chunkStart,
+                                       hotwords: hotwords)
             out.append(contentsOf: segs)
             progress(Double(index + 1) / Double(max(chunks.count, 1)))
         }
@@ -208,8 +230,17 @@ public actor SherpaEngine: ASREngine {
     // MARK: - デコード
 
     private static func decode(recognizer: OpaquePointer, samples: [Float],
-                               sampleRate: Int32, startOffset: Double) throws -> [Segment] {
-        guard let stream = SherpaOnnxCreateOfflineStream(recognizer) else {
+                               sampleRate: Int32, startOffset: Double,
+                               hotwords: String? = nil) throws -> [Segment] {
+        let stream: OpaquePointer?
+        if let hotwords, !hotwords.isEmpty {
+            stream = hotwords.withCString {
+                SherpaOnnxCreateOfflineStreamWithHotwords(recognizer, $0)
+            }
+        } else {
+            stream = SherpaOnnxCreateOfflineStream(recognizer)
+        }
+        guard let stream else {
             throw ASRError.engineFailed("SherpaOnnxCreateOfflineStream が nil を返した")
         }
         defer { SherpaOnnxDestroyOfflineStream(stream) }
@@ -371,21 +402,5 @@ public actor SherpaEngine: ASREngine {
     }
 }
 
-/// recognizer の所有者。actor の外からも解放できるようロックで持つ。
-private final class SherpaRecognizerBox: @unchecked Sendable {
-    private var ptr: OpaquePointer?
-    private let lock = NSLock()
-    var pointer: OpaquePointer? { lock.lock(); defer { lock.unlock() }; return ptr }
-    func set(_ p: OpaquePointer) {
-        lock.lock()
-        if let old = ptr { SherpaOnnxDestroyOfflineRecognizer(old) }
-        ptr = p
-        lock.unlock()
-    }
-    func free() {
-        lock.lock()
-        if let p = ptr { SherpaOnnxDestroyOfflineRecognizer(p); ptr = nil }
-        lock.unlock()
-    }
-    deinit { free() }
-}
+/// recognizer の所有者は NativeObjectBox（ASR層共通）。
+/// デコード中に destroy されないよう、解放側は使用中カウントが 0 になるまで待つ。

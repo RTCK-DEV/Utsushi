@@ -7,10 +7,12 @@ public struct ASRRequest: Sendable {
     public var timeRange: ClosedRange<Double>?
     /// VADを使うか。取りこぼし検証のために意図的に切ることがある。
     public var useVAD: Bool
-    /// 認識を語彙側から誘導するためのヒント（whisper系の initial_prompt）。
+    /// 認識を語彙側から誘導するための語表（辞書の表記の生リスト）。
     /// 固有名詞・専門語の誤認識は「モデルがその語を知らない」ことが原因なので、
     /// エンジンを増やすより先にここで効かせる。
-    public var vocabularyHint: String?
+    /// 各エンジンが自分のAPI向けに整形する（whisper は initial_prompt、
+    /// sherpa は hotwords）。
+    public var vocabularyTerms: [String]
     /// 直前の窓の認識結果を次の窓の prompt に持ち越すか。
     ///
     /// 既定は持ち越す（文脈が効いて精度が上がる）。ただし whisper は一度反復ループに入ると、
@@ -20,10 +22,10 @@ public struct ASRRequest: Sendable {
 
     public init(samples: [Float], language: String = "ja",
                 timeRange: ClosedRange<Double>? = nil, useVAD: Bool = true,
-                vocabularyHint: String? = nil, carryContext: Bool = true) {
+                vocabularyTerms: [String] = [], carryContext: Bool = true) {
         self.samples = samples; self.language = language
         self.timeRange = timeRange; self.useVAD = useVAD
-        self.vocabularyHint = vocabularyHint
+        self.vocabularyTerms = vocabularyTerms
         self.carryContext = carryContext
     }
 }
@@ -33,7 +35,7 @@ public protocol ASREngine: Sendable {
     var displayName: String { get }
     var supportsVAD: Bool { get }
     var exposesConfidence: Bool { get }
-    /// 語彙ヒント（initial_prompt 相当）を受け付けるか
+    /// 語彙ヒント（initial_prompt / hotwords 相当）を受け付けるか
     var supportsVocabularyHint: Bool { get }
     func prepare(progress: @escaping @Sendable (String, Double) -> Void) async throws
     func transcribe(_ request: ASRRequest,

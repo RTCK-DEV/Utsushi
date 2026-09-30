@@ -47,8 +47,10 @@ public struct PlausibilityFlag: Sendable, Codable, Equatable, Identifiable {
     /// **無い候補を埋めない。** 埋めると読み手はそれを正解として読む。
     /// 文言が2箇所にあると片方だけ直って、画面とファイルで言うことが変わる。
     public var alternativeNote: String {
-        if let alternative, !alternative.isEmpty { return "→「\(alternative)」かもしれない" }
-        return "（正しい語は不明）"
+        if let alternative, !alternative.isEmpty {
+            return String(localized: "→「\(alternative)」かもしれない")
+        }
+        return String(localized: "（正しい語は不明）")
     }
 }
 
@@ -303,7 +305,8 @@ public struct PlausibilityAuditor: Sendable {
     /// `segments` の並びがそのまま行番号（1始まり）になる。窓の中では窓内の番号で渡し、
     /// 戻ってきた番号に窓の先頭を足して元の並びへ戻す。
     public func run(on segments: [Segment],
-                    progress: @Sendable (Int, Int) -> Void = { _, _ in }) async -> ([PlausibilityFlag], Outcome) {
+                    progress: @Sendable (Int, Int) -> Void = { _, _ in },
+                    isCancelled: @Sendable () -> Bool = { false }) async -> ([PlausibilityFlag], Outcome) {
         var stat = Outcome()
         guard let checker, !segments.isEmpty else { return ([], stat) }
 
@@ -313,6 +316,7 @@ public struct PlausibilityAuditor: Sendable {
         var seen = Set<String>()
 
         for (w, window) in windows.enumerated() {
+            if isCancelled() { break }
             progress(w, windows.count)
             let numbered = window.lines.enumerated()
                 .map { "\($0.offset + 1). \($0.element)" }

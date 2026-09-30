@@ -17,6 +17,12 @@ public struct HallucinationAuditor: Sendable {
         /// 尺がこの秒数以上で、かつ文字密度が下限を切ったら取りこぼし疑い
         public var densityMinDuration: Double = 12
         public var densityMinCharsPerSecond: Double = 0.8
+        /// 尺がこの秒数以上で、かつ文字密度が上限を超えたら書き過ぎ疑い。
+        /// 短いセグメントはタイムスタンプの丸めで密度が跳ねるので別の下限を置く。
+        /// 上限は自然な日本語の最速（秒速10文字前後）を大きく超える 25 に置く。
+        /// 連結継ぎ目では 70文字/秒 が実測された。
+        public var densityExcessMinDuration: Double = 0.5
+        public var densityMaxCharsPerSecond: Double = 25
         /// 尤度がこれを下回れば低信頼
         public var minAvgLogprob: Double = -1.0
         /// 無音確率がこれを超えれば無音扱い
@@ -100,8 +106,10 @@ public struct HallucinationAuditor: Sendable {
 
             // これ未満しか削れないなら触らない（記録が無駄に増えるだけ）
             let cuts: [(removed: Double, range: ClosedRange<Double>, where: String)] = [
-                (removedTail, trimmedEnd...seg.end, "発話の終わりから \(Self.seconds(removedTail)) 先まで"),
-                (removedHead, seg.start...trimmedStart, "発話の始まりより \(Self.seconds(removedHead)) 手前から"),
+                (removedTail, trimmedEnd...seg.end,
+                 String(localized: "発話の終わりから \(Self.seconds(removedTail)) 先まで")),
+                (removedHead, seg.start...trimmedStart,
+                 String(localized: "発話の始まりより \(Self.seconds(removedHead)) 手前から")),
             ].filter { $0.removed >= policy.overrunMinTrim }
             guard !cuts.isEmpty else { continue }
             stats.overrunTrimmedCount += 1   // セグメント数。両端を削っても1本は1本
@@ -109,7 +117,7 @@ public struct HallucinationAuditor: Sendable {
                 stats.overrunTrimmedSeconds += cut.removed
                 findings.append(.init(kind: .segmentOverrun,
                                       start: cut.range.lowerBound, end: cut.range.upperBound,
-                                      detail: "\(cut.where)尺が伸びていたため切り詰めた（この区間に音は無い）",
+                                      detail: String(localized: "\(cut.where)尺が伸びていたため切り詰めた（この区間に音は無い）"),
                                       action: .repaired))
             }
         }
@@ -135,7 +143,9 @@ public struct HallucinationAuditor: Sendable {
                 stats.suppressedCount += 1
                 findings.append(.init(kind: .silentHallucination,
                                       start: out[i].start, end: out[i].end,
-                                      detail: "音圧 \(String(format: "%.1f", peak))dBFS / 有声率 \(String(format: "%.2f", voiced)) の区間に「\(segments[i].original.prefix(24))」が出力された",
+                                      // Substring を localized 補間に渡すと %@ の
+                                      // フォーマット経路で落ちるので String にしておく
+                                      detail: String(localized: "音圧 \(String(format: "%.1f", peak))dBFS / 有声率 \(String(format: "%.2f", voiced)) の区間に「\(String(segments[i].original.prefix(24)))」が出力された"),
                                       action: .suppressed))
             }
         }
@@ -153,7 +163,7 @@ public struct HallucinationAuditor: Sendable {
                 }
                 findings.append(.init(kind: .repetitionLoop,
                                       start: out[runStart].start, end: out[endIndex].end,
-                                      detail: "「\(out[runStart].original.prefix(20))」が \(run) 回連続した",
+                                      detail: String(localized: "「\(String(out[runStart].original.prefix(20)))」が \(run) 回連続した"),
                                       action: .suppressed))
             }
             run = 1
@@ -177,7 +187,7 @@ public struct HallucinationAuditor: Sendable {
                 stats.suppressedCount += 1
                 findings.append(.init(kind: .silentHallucination,
                                       start: out[i].start, end: out[i].end,
-                                      detail: "既知の幻聴フレーズ「\(t)」が低音圧区間に出力された",
+                                      detail: String(localized: "既知の幻聴フレーズ「\(t)」が低音圧区間に出力された"),
                                       action: .suppressed))
             }
         }
@@ -189,7 +199,7 @@ public struct HallucinationAuditor: Sendable {
                     out[i].flags.insert(.lowConfidence)
                     findings.append(.init(kind: .lowConfidence,
                                           start: out[i].start, end: out[i].end,
-                                          detail: "平均対数尤度 \(String(format: "%.2f", lp))",
+                                          detail: String(localized: "平均対数尤度 \(String(format: "%.2f", lp))"),
                                           action: .marked))
                 }
             }
@@ -209,7 +219,22 @@ public struct HallucinationAuditor: Sendable {
             out[i].flags.insert(.densityAnomaly)
             findings.append(.init(kind: .densityAnomaly,
                                   start: out[i].start, end: out[i].end,
-                                  detail: "\(String(format: "%.0f", d))秒に \(out[i].original.count) 文字。うち約\(String(format: "%.0f", voicedSeconds))秒は有声",
+                                  detail: String(localized: "\(String(format: "%.0f", d))秒に \(out[i].original.count) 文字。うち約\(String(format: "%.0f", voicedSeconds))秒は有声"),
+                                  action: .unresolved))
+        }
+
+        // 6b. 文字密度異常（書き過ぎ）。ブロック境界を跨いだセグメントや連結素材の
+        // 継ぎ目では、ありえない速さの本文が出る（実測 70文字/秒）。
+        // 取りこぼし側と違い尺の下限を小さく取る。壊れるのは短いセグメントの方。
+        for i in out.indices where !out[i].isSuppressed {
+            let d = out[i].duration
+            guard d >= policy.densityExcessMinDuration else { continue }
+            let density = Double(out[i].original.count) / d
+            guard density > policy.densityMaxCharsPerSecond else { continue }
+            out[i].flags.insert(.densityExcess)
+            findings.append(.init(kind: .densityExcess,
+                                  start: out[i].start, end: out[i].end,
+                                  detail: String(localized: "\(String(format: "%.1f", d))秒に \(out[i].original.count) 文字（\(String(format: "%.0f", density))文字/秒）"),
                                   action: .unresolved))
         }
 
@@ -223,7 +248,7 @@ public struct HallucinationAuditor: Sendable {
             guard voiced * gap >= 2.0 else { continue }
             findings.append(.init(kind: .coverageGap,
                                   start: ordered[i-1].end, end: ordered[i].start,
-                                  detail: "\(String(format: "%.1f", gap))秒の空白のうち約\(String(format: "%.1f", voiced * gap))秒に音がある",
+                                  detail: String(localized: "\(String(format: "%.1f", gap))秒の空白のうち約\(String(format: "%.1f", voiced * gap))秒に音がある"),
                                   action: .unresolved))
         }
 
@@ -279,7 +304,8 @@ public struct HallucinationAuditor: Sendable {
                            totalDuration: Double) -> [RepairTarget] {
         let targets = report.findings.filter {
             switch $0.kind {
-            case .densityAnomaly, .coverageGap: return $0.action == .unresolved
+            case .densityAnomaly, .densityExcess, .coverageGap:
+                return $0.action == .unresolved
             case .repetitionLoop: return ($0.end - $0.start) >= policy.repetitionRepairMinSeconds
             default: return false
             }

@@ -12,6 +12,7 @@ struct UtsushiApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {
+                // キュー制なので実行中の追加も安全（差し替えではなく積み上げ）。
                 Button("ファイルを開く…") { model.presentOpenPanel() }
                     .keyboardShortcut("o")
             }

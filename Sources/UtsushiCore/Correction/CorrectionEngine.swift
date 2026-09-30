@@ -1,4 +1,5 @@
 import Foundation
+import FoundationModels
 
 /// 校正エンジンの抽象。LLMを差し替えても検証層は動く。
 public protocol CorrectionEngine: Sendable {
@@ -14,6 +15,31 @@ public enum CorrectionAvailability: Sendable, Equatable {
     case unavailable(String)
     public var isAvailable: Bool { self == .available }
     public var reason: String? { if case .unavailable(let r) = self { return r }; return nil }
+}
+
+/// `SystemLanguageModel` の可用性をアプリの表現に写す唯一の場所。
+/// 校正・判定・要約・文脈点検の4箇所が同じ switch を持っていた。
+@available(macOS 26.0, *)
+public extension SystemLanguageModel.Availability {
+    var correctionAvailability: CorrectionAvailability {
+        switch self {
+        case .available: return .available
+        case .unavailable(let reason): return .unavailable(reason.displayMessage)
+        @unknown default: return .unavailable(String(localized: "未知の理由でモデルが利用できない"))
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private extension SystemLanguageModel.Availability.UnavailableReason {
+    var displayMessage: String {
+        switch self {
+        case .deviceNotEligible: return String(localized: "このMacはApple Intelligenceに対応していない")
+        case .appleIntelligenceNotEnabled: return String(localized: "システム設定でApple Intelligenceが有効になっていない")
+        case .modelNotReady: return String(localized: "モデルのダウンロード/準備が完了していない")
+        @unknown default: return String(localized: "モデルが利用できない")
+        }
+    }
 }
 
 public struct CorrectionContext: Sendable {
@@ -60,12 +86,14 @@ public struct Corrector: Sendable {
     }
 
     public func run(on segments: [Segment],
-                    progress: (@Sendable (Int, Int) -> Void)? = nil) async -> ([Segment], CorrectionOutcome) {
+                    progress: (@Sendable (Int, Int) -> Void)? = nil,
+                    isCancelled: @Sendable () -> Bool = { false }) async -> ([Segment], CorrectionOutcome) {
         var out = segments
         var stat = CorrectionOutcome()
         var preceding = ""
 
         for i in out.indices {
+            if isCancelled() { break }
             progress?(i, out.count)
             let seg = out[i]
             guard !seg.isSuppressed, !seg.original.isEmpty else { continue }
@@ -86,11 +114,20 @@ public struct Corrector: Sendable {
                 let ctx = CorrectionContext(precedingText: preceding,
                                             vocabulary: dictionary.entries.map(\.surface))
                 do {
+                    // 同意確認の2回目は毎回新しいセッションを作るので、
+                    // 1回目と並行に投げられる。first が nil でも打ち上げてしまうが、
+                    // その場合は直列のとき1回しか投げなかった分だけ無駄になるだけで
+                    // 意味は変わらない。
+                    let proposalText = text
+                    async let secondP: String? = {
+                        guard requireAgreement else { return nil }
+                        return try await engine.propose(segment: proposalText, context: ctx)
+                    }()
                     if let first = try await engine.propose(segment: text, context: ctx) {
                         stat.proposed += 1
                         var candidate: String? = first
                         if requireAgreement {
-                            let second = try await engine.propose(segment: text, context: ctx)
+                            let second = try await secondP
                             if (second ?? text) != first { candidate = nil }
                         }
                         if let candidate {

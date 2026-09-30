@@ -44,14 +44,25 @@ public struct UserDictionary: Sendable, Codable, Equatable {
         return false
     }
 
+    /// 辞書の表記の生リスト。エンジンに流す語彙ヒントの素。
+    /// whisper には `promptHint` で整形して、sherpa にはそのまま hotwords に渡す。
+    public var hintTerms: [String] {
+        entries.map(\.surface)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     /// whisper の initial_prompt に流す語彙ヒント。
     ///
     /// initial_prompt は n_text_ctx/2（=224トークン）で切られるため、詰め込みすぎると
     /// 後ろが黙って捨てられる。日本語は約1.2文字/トークンなので文字数で上限を掛ける。
     public func promptHint(maxCharacters: Int = 200) -> String? {
-        let terms = entries.map(\.surface)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        Self.promptHint(terms: hintTerms, maxCharacters: maxCharacters)
+    }
+
+    /// 語リストを whisper の initial_prompt 形式に整形する。
+    /// `ASRRequest.vocabularyTerms` を受け取ったエンジン側から呼ぶ。
+    public static func promptHint(terms: [String], maxCharacters: Int = 200) -> String? {
         guard !terms.isEmpty else { return nil }
 
         var picked: [String] = []

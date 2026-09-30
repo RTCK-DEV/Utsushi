@@ -12,7 +12,9 @@ import CoreMedia
 @available(macOS 26.0, *)
 public actor SpeechAnalyzerEngine: ASREngine {
     public nonisolated let identifier = "apple.speechanalyzer"
-    public nonisolated let displayName = "Apple SpeechTranscriber (OS内蔵)"
+    public nonisolated var displayName: String {
+        String(localized: "Apple SpeechTranscriber (OS内蔵)")
+    }
     public nonisolated let supportsVAD = false
     public nonisolated let exposesConfidence = false
     /// SpeechTranscriber に initial_prompt 相当のAPIは無い。
@@ -32,20 +34,20 @@ public actor SpeechAnalyzerEngine: ASREngine {
     }
 
     public func prepare(progress: @escaping @Sendable (String, Double) -> Void) async throws {
-        progress("対応言語を確認中", 0.05)
+        progress(String(localized: "対応言語を確認中"), 0.05)
         guard await Self.isLocaleSupported(locale) else {
             throw ASRError.localeUnsupported(locale.identifier)
         }
         let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedTranscriptionWithAlternatives)
         let installed = await SpeechTranscriber.installedLocales
         if !installed.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) {
-            progress("言語モデルをインストール中", 0.2)
+            progress(String(localized: "言語モデルをインストール中"), 0.2)
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                 try await request.downloadAndInstall()
             }
         }
         prepared = true
-        progress("準備完了", 1.0)
+        progress(String(localized: "準備完了"), 1.0)
     }
 
     public func transcribe(_ request: ASRRequest,
@@ -64,6 +66,16 @@ public actor SpeechAnalyzerEngine: ASREngine {
         let audioFile = try AVAudioFile(forReading: fileURL)
         let totalSeconds = Double(audioFile.length) / audioFile.fileFormat.sampleRate
 
+        // キャンセルを analyzeSequence に伝える監視。入れないとコレクタは止まっても
+        // 解析本体はファイルの最後まで走り続ける（43分素材で数十秒待たされていた）。
+        let cancellationWatcher = Task {
+            while !Task.isCancelled {
+                if isCancelled() { await analyzer.cancelAndFinishNow(); return }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        defer { cancellationWatcher.cancel() }
+
         // actor 隔離された変数を Task 内で書き換えるとデータ競合になるため、
         // ロック付きの箱に集めてから取り出す。
         let sink = SegmentSink()
@@ -80,8 +92,17 @@ public actor SpeechAnalyzerEngine: ASREngine {
                 }
             }
         }
-        _ = try await analyzer.analyzeSequence(from: audioFile)
-        try await analyzer.finalizeAndFinishThroughEndOfInput()
+        // 解析が投げて返ってきた経路でも、結果を待ち続けるタスクを残さない
+        defer { collector.cancel() }
+        // キャンセルによる中断が Speech 側のエラーとして上がることがある。
+        // isCancelled が立っていたら理由に関わらず cancelled で返す。
+        do {
+            _ = try await analyzer.analyzeSequence(from: audioFile)
+            try await analyzer.finalizeAndFinishThroughEndOfInput()
+        } catch {
+            if isCancelled() { throw ASRError.cancelled }
+            throw error
+        }
         _ = try? await collector.value
         if isCancelled() { throw ASRError.cancelled }
 

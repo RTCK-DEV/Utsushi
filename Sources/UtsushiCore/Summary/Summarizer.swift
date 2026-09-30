@@ -97,7 +97,8 @@ public struct Summarizer: Sendable {
     }
 
     public func run(on segments: [Segment],
-                    progress: @Sendable (Int, Int) -> Void = { _, _ in }) async -> Summary {
+                    progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in },
+                    isCancelled: @escaping @Sendable () -> Bool = { false }) async -> Summary {
         var summary = Summary()
         let all = chunks(from: segments)
         summary.stats.chunkCount = all.count
@@ -105,12 +106,19 @@ public struct Summarizer: Sendable {
 
         let gate = SummaryGate(policy: config.gatePolicy)
 
-        for (i, chunk) in all.enumerated() {
-            progress(i, all.count)
-            let selections: [SummarySelection]
-            do {
-                selections = try await engine.select(from: chunk, maxPoints: config.maxPointsPerChunk)
-            } catch {
+        // 塊ごとの選択は互いに独立した LLM 呼び出しなので、上限を付けて並行に投げる。
+        // ゲート評価と統計の畳み込みは入力順に逐次で行い、結果は直列と同じになる。
+        let selected = await BoundedParallel.compactMap(
+            all, concurrency: 4,
+            progress: { progress($0, all.count) },
+            isCancelled: isCancelled
+        ) { chunk -> (SummaryChunk, [SummarySelection]?)? in
+            if isCancelled() { return nil }
+            return (chunk, try? await engine.select(from: chunk, maxPoints: config.maxPointsPerChunk))
+        }
+
+        for (chunk, selections) in selected {
+            guard let selections else {
                 summary.stats.failedChunkCount += 1
                 continue
             }
