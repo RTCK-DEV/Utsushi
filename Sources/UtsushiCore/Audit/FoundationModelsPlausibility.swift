@@ -85,20 +85,7 @@ public final class FoundationModelsPlausibility: PlausibilityChecker, @unchecked
     }
 
     public func isAvailable() async -> CorrectionAvailability {
-        switch SystemLanguageModel.default.availability {
-        case .available: return .available
-        case .unavailable(let reason): return .unavailable(Self.describe(reason))
-        @unknown default: return .unavailable(String(localized: "未知の理由でモデルが利用できない"))
-        }
-    }
-
-    private static func describe(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
-        switch reason {
-        case .deviceNotEligible: return String(localized: "このMacはApple Intelligenceに対応していない")
-        case .appleIntelligenceNotEnabled: return String(localized: "システム設定でApple Intelligenceが有効になっていない")
-        case .modelNotReady: return String(localized: "モデルのダウンロード/準備が完了していない")
-        @unknown default: return String(localized: "モデルが利用できない")
-        }
+        SystemLanguageModel.default.availability.correctionAvailability
     }
 
     public func check(numberedText: String, lineCount: Int) async throws -> [PlausibilityDraft] {

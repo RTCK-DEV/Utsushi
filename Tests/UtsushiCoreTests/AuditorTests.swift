@@ -62,6 +62,32 @@ final class HallucinationAuditorTests: XCTestCase {
         XCTAssertFalse(plan.isEmpty, "取りこぼし疑いは再認識計画に載るべき")
     }
 
+    func testDetectsDensityExcess() {
+        // 連結継ぎ目で実測された形: 1秒に70文字のような、人が喋れない密度
+        let segs = [
+            Segment(start: 0, end: 2, original: String(repeating: "あ", count: 140)),
+            Segment(start: 5, end: 20, original: "これは普通の速さの発話です"),
+        ]
+        let env = envelope([(0, 20, -20)], total: 20)
+        let (out, report) = HallucinationAuditor().audit(segments: segs, envelope: env,
+                                                        totalDuration: 20, engineExposesConfidence: true)
+        XCTAssertTrue(out[0].flags.contains(.densityExcess))
+        XCTAssertFalse(out[1].flags.contains(.densityExcess),
+                       "普通の速さの発話を過多と誤検出してはいけない")
+        let plan = HallucinationAuditor().repairPlan(from: report, totalDuration: 20)
+        XCTAssertTrue(plan.contains { $0.kind == .densityExcess },
+                      "書き過ぎ疑いも再認識計画に載るべき")
+    }
+
+    func testNoDensityExcessOnFastSpeech() {
+        // 早口（10文字/秒級）の本物の発話を弾かない
+        let segs = [Segment(start: 0, end: 10, original: String(repeating: "あ", count: 100))]
+        let env = envelope([(0, 10, -20)], total: 10)
+        let (out, _) = HallucinationAuditor().audit(segments: segs, envelope: env,
+                                                   totalDuration: 10, engineExposesConfidence: true)
+        XCTAssertFalse(out[0].flags.contains(.densityExcess))
+    }
+
     func testNoDensityAnomalyOnSilentSpan() {
         // 休憩の無音を取りこぼしと誤検出してはいけない
         let segs = [Segment(start: 100, end: 340, original: "では一旦休憩挟みます")]

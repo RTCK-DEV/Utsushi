@@ -30,6 +30,7 @@ public struct AuditReport: Sendable, Codable, Equatable {
             case silentHallucination   // 無音区間に本文が出た
             case repetitionLoop        // 同一文の連続
             case densityAnomaly        // 尺に対して文字数が少なすぎる
+            case densityExcess         // 尺に対して文字数が多すぎる（継ぎ目・重複の疑い）
             case lowConfidence         // 尤度が低い
             case coverageGap           // セグメント間に無視できない空白
             case segmentOverrun        // 発話の終わりより先まで尺が伸びていた

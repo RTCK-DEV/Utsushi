@@ -182,12 +182,16 @@ final class NotationTests: XCTestCase {
 }
 
 /// 呼ばれた回数を数えるだけの判定役。
+/// 同意確認で並行に2回呼ばれるので、カウントはロックで守る。
 private final class CountingJudge: DisagreementJudge, @unchecked Sendable {
     var displayName: String { "counting" }
-    private(set) var calls = 0
+    private let lock = NSLock()
+    private var _calls = 0
+    var calls: Int { lock.lock(); defer { lock.unlock() }; return _calls }
+    private func increment() { lock.lock(); defer { lock.unlock() }; _calls += 1 }
     func isAvailable() async -> CorrectionAvailability { .available }
     func judge(_ d: TranscriptAlignment.Disagreement) async throws -> Int? {
-        calls += 1
+        increment()
         return 0
     }
 }

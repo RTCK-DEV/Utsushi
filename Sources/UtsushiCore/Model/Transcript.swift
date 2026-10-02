@@ -54,6 +54,8 @@ public enum SegmentFlag: String, Sendable, Codable, Hashable {
     case lowConfidence
     /// 尺に対して文字数が異常に少ない＝取りこぼしの疑い
     case densityAnomaly
+    /// 尺に対して文字数が異常に多い＝継ぎ目・重複書き出しの疑い
+    case densityExcess
     /// 取りこぼし疑いを再認識して差し替えた
     case repaired
 }

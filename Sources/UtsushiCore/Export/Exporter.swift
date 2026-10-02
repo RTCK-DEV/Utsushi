@@ -141,16 +141,19 @@ public struct Exporter: Sendable {
         var chunk = -1
         var emittedGaps = 0
         var previousEnd: Double? = nil
+        // 「発話なし」区間の1行。同じ整形が2箇所（途中と末尾）にあるので1つに閉じる。
+        func emitGap(_ g: ClosedRange<Double>) {
+            let minutes = Int((g.upperBound - g.lowerBound) / 60)
+            let span = minutes >= 1 ? "約\(minutes)分" : "\(Int(g.upperBound - g.lowerBound))秒"
+            out.append("\n> —— 発話なし \(Self.hms(g.lowerBound)) – \(Self.hms(g.upperBound))"
+                       + "（\(span)）——\n")
+            emittedGaps += 1
+        }
         for seg in t.visibleSegments {
             // 無音区間は音声から出しているので、セグメント境界には一致しない。
             // 「まだ出していない無音のうち、このセグメントより前に始まるもの」を出す。
             while emittedGaps < gaps.count, gaps[emittedGaps].lowerBound < seg.start {
-                let g = gaps[emittedGaps]
-                let minutes = Int((g.upperBound - g.lowerBound) / 60)
-                let span = minutes >= 1 ? "約\(minutes)分" : "\(Int(g.upperBound - g.lowerBound))秒"
-                out.append("\n> —— 発話なし \(Self.hms(g.lowerBound)) – \(Self.hms(g.upperBound))"
-                           + "（\(span)）——\n")
-                emittedGaps += 1
+                emitGap(gaps[emittedGaps])
             }
             _ = previousEnd
             let c = Int(seg.start / 600)
@@ -166,14 +169,7 @@ public struct Exporter: Sendable {
             previousEnd = seg.end
         }
         // 末尾の無音（収録の最後が無音で終わる場合）も出す
-        while emittedGaps < gaps.count {
-            let g = gaps[emittedGaps]
-            let minutes = Int((g.upperBound - g.lowerBound) / 60)
-            let span = minutes >= 1 ? "約\(minutes)分" : "\(Int(g.upperBound - g.lowerBound))秒"
-            out.append("\n> —— 発話なし \(Self.hms(g.lowerBound)) – \(Self.hms(g.upperBound))"
-                       + "（\(span)）——\n")
-            emittedGaps += 1
-        }
+        while emittedGaps < gaps.count { emitGap(gaps[emittedGaps]) }
 
         out.append("\n---\n")
         out.append("""
@@ -419,6 +415,7 @@ public struct Exporter: Sendable {
         case .silentHallucination: return "無音区間の幻聴"
         case .repetitionLoop: return "反復ループ"
         case .densityAnomaly: return "取りこぼし疑い"
+        case .densityExcess: return "書き過ぎ疑い"
         case .lowConfidence: return "低信頼"
         case .coverageGap: return "カバレッジの穴"
         case .segmentOverrun: return "尺が発話より長い"

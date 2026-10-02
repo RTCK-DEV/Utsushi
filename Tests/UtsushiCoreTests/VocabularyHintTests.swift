@@ -35,11 +35,11 @@ final class VocabularyHintEffectTests: XCTestCase {
 
         let audio = try await AudioExtractor().extract(url: Self.clipURL)
 
-        func run(hint: String?) async throws -> (segments: [Segment], seconds: Double) {
+        func run(terms: [String]) async throws -> (segments: [Segment], seconds: Double) {
             let t = Date()
             let segs = try await engine.transcribe(
                 ASRRequest(samples: audio.samples, language: "ja",
-                           useVAD: true, vocabularyHint: hint),
+                           useVAD: true, vocabularyTerms: terms),
                 progress: { _ in }, isCancelled: { false })
             return (segs, Date().timeIntervalSince(t))
         }
@@ -50,8 +50,8 @@ final class VocabularyHintEffectTests: XCTestCase {
         let hint = dict.promptHint()
         XCTAssertNotNil(hint)
 
-        let base = try await run(hint: nil)
-        let hinted = try await run(hint: hint)
+        let base = try await run(terms: [])
+        let hinted = try await run(terms: dict.hintTerms)
 
         let baseText = base.segments.map(\.original).joined()
         let hintedText = hinted.segments.map(\.original).joined()

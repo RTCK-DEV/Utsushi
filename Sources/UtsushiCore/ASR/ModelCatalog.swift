@@ -76,7 +76,7 @@ public struct ModelCatalog: Sendable {
                            sizeBytes: 1_624_555_275)],
               approximateBytes: 1_624_555_275,
               note: String(localized: "既定。日本語の精度と速度のバランスが最も良い")),
-        Model(id: "ggml-large-v3-turbo-q5_0", displayName: "large-v3-turbo (q5_0 量子化)", engine: .whisper,
+        Model(id: "ggml-large-v3-turbo-q5_0", displayName: String(localized: "large-v3-turbo (q5_0 量子化)"), engine: .whisper,
               items: [Item(role: "model", fileName: "ggml-large-v3-turbo-q5_0.bin",
                            url: URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin")!,
                            sizeBytes: 574_041_195)],
@@ -106,7 +106,10 @@ public struct ModelCatalog: Sendable {
                      pathInArchive: "tokens.txt"),
               ],
               archiveURL: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01.tar.bz2")!,
-              approximateBytes: 160_000_000,
+              // アーカイブ実測 713,097,333 bytes。以前は展開後の int8 モデル本体だけを
+              // 見ていて160MBと記していたが、ダウンロード表示はアーカイブの実サイズでなければ
+              // 進捗が4倍ずれる。
+              approximateBytes: 713_097_333,
               note: String(localized: "日本語35,000時間で学習。RNN-T系なのでwhisperと誤りが独立しやすい")),
         // LLMデコーダ型。他の2つと違い、音響から素直に写すのではなく
         // 文脈から補って書く。精度指標では有利に出るが、このアプリでは
@@ -132,7 +135,8 @@ public struct ModelCatalog: Sendable {
                      pathInArchive: "tokenizer_config.json", sizeBytes: 0),
               ],
               archiveURL: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2")!,
-              approximateBytes: 940_000_000,
+              // アーカイブ実測 878,702,423 bytes
+              approximateBytes: 878_702_423,
               note: String(localized: "LLMデコーダ型。文脈から補うので、音響に無い語を書くことがある"),
               attribution: "This product includes Qwen3-ASR by Alibaba, licensed under Apache-2.0.",
               caveat: String(localized: "実行のたびに出力が変わる（同じ音声・同じ設定で 753 / 758 / 759 文字）。同一インスタンス内なら一致するが、プロセスをまたぐと一致しない。temperature=0・seed 固定・スレッド1でも消えず、原因は未特定。照合の相手にすると「前回は決着した箇所が今回は未決」が起き、CER を測っても再現しない。速度も 6.7 倍速と他の 5〜10 分の1。")),
@@ -161,7 +165,7 @@ public struct ModelCatalog: Sendable {
         // 名前が続いているだけで中身が別物、というのはリリース名からは読み取れない。
         // 新しいモデルを足すときは onnx のメタデータを見ること。
         Model(id: "sherpa-sense-voice-2024-07-17",
-              displayName: "SenseVoice Small (int8・多言語)",
+              displayName: String(localized: "SenseVoice Small (int8・多言語)"),
               engine: .sherpaSenseVoice,
               items: [
                 Item(role: "model", fileName: "model.int8.onnx",
@@ -183,7 +187,8 @@ public struct ModelCatalog: Sendable {
                      pathInArchive: "tokens.txt"),
               ],
               archiveURL: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8.tar.bz2")!,
-              approximateBytes: 670_000_000,
+              // アーカイブ実測 489,389,564 bytes
+              approximateBytes: 489_389_564,
               note: String(localized: "FastConformer系。ReazonSpeech v2で学習"),
               attribution: "This product includes NVIDIA parakeet-tdt_ctc-0.6b-ja, licensed under CC BY 4.0."),
     ]
@@ -222,7 +227,7 @@ public struct ModelCatalog: Sendable {
     ///     語彙ヒントに非対応なので辞書で補正できない。一次認識より照合に向く
     public static let appleModel = Model(
         id: "apple.speechanalyzer",
-        displayName: "Apple SpeechTranscriber (OS内蔵)",
+        displayName: String(localized: "Apple SpeechTranscriber (OS内蔵)"),
         engine: .appleSpeechAnalyzer,
         items: [],
         approximateBytes: 0,

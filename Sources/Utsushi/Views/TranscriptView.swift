@@ -4,7 +4,6 @@ struct TranscriptView: View {
     @EnvironmentObject var model: AppModel
     let transcript: Transcript
     @State private var tab: Tab = .text
-    @State private var showOnlyCorrected = false
     @State private var renameTarget: Int?
     @State private var renameText = ""
 
@@ -15,16 +14,28 @@ struct TranscriptView: View {
         case crossCheck = "照合"
         case audit = "検証記録"
         var id: String { rawValue }
+        /// rawValue（String）をそのまま Text に渡すと翻訳を通らないので
+        /// LocalizedStringKey 経由にする
+        var displayName: LocalizedStringKey { LocalizedStringKey(rawValue) }
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $tab) {
+            ForEach(Tab.allCases) { Text($0.displayName).tag($0) }
+        }
+        .labelsHidden()
+        .padding(8)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $tab) {
-                ForEach(Tab.allCases) { Text(LocalizedStringKey($0.rawValue)).tag($0) }
+            // macOS 27 の TabsPickerStyle — 「タブ切り替え」用の見た目・読み上げになる。
+            // segmented は値選択用なので意味が違う。26 では segmented に落とす。
+            if #available(macOS 27.0, *) {
+                tabPicker.pickerStyle(.tabs)
+            } else {
+                tabPicker.pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(8)
             Divider()
             switch tab {
             case .text: textList
@@ -71,9 +82,7 @@ struct TranscriptView: View {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(Array(segs.enumerated()), id: \.element.id) { index, seg in
                             HStack(alignment: .top, spacing: 10) {
-                                Text(Exporter.hms(seg.start))
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                                TimestampLabel(seconds: seg.start)
                                     .frame(width: 68, alignment: .leading)
                                 if let speaker = seg.speaker {
                                     SpeakerMenu(speaker: speaker, segment: seg,
@@ -365,11 +374,8 @@ struct CorrectionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text(Exporter.hms(segment.start))
-                    .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                Text(ruleLabel).font(.caption2)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                TimestampLabel(seconds: segment.start)
+                CapsuleBadge(label: ruleLabel, color: .accentColor)
                 Spacer()
                 if segment.correction?.accepted == true {
                     Button("原文に戻す") { model.revert(segment) }.font(.caption)
@@ -384,16 +390,15 @@ struct CorrectionRow: View {
                 .foregroundStyle(segment.correction?.accepted == true ? .primary : .secondary)
                 .textSelection(.enabled)
         }
-        .padding(10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .cardBackground()
     }
 
-    private var ruleLabel: String {
+    private var ruleLabel: LocalizedStringKey {
         switch segment.correction?.rule {
-        case .dictionary: return String(localized: "辞書")
-        case .fillerRemoval: return String(localized: "フィラー除去")
-        case .notation: return String(localized: "表記統一")
-        case .languageModel: return String(localized: "LLM（ゲート通過）")
+        case .dictionary: return "辞書"
+        case .fillerRemoval: return "フィラー除去"
+        case .notation: return "表記統一"
+        case .languageModel: return "LLM（ゲート通過）"
         case .none: return "-"
         }
     }

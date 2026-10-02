@@ -142,12 +142,29 @@ targets:
       - sdk: Speech.framework
       - sdk: FoundationModels.framework
 
+  UtsushiUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/UtsushiUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.rtck.UtsushiUITests
+        GENERATE_INFOPLIST_FILE: YES
+        # base で hardened runtime が有効だと、adhoc 署名のテストバンドルが
+        # macOS 27 で「Team ID が違う」と dlopen を拒否される（実際に起きた）。
+        # テストランナーにガードは要らないので外す。
+        ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      - target: Utsushi
+
 schemes:
   Utsushi:
     build:
       targets:
         Utsushi: all
         UtsushiTests: [test]
+        UtsushiUITests: [test]
     run:
       config: Debug
     test:
@@ -158,3 +175,4 @@ schemes:
         UTSUSHI_PRODUCTION_MEDIA: "${UTSUSHI_PRODUCTION_MEDIA}"
       targets:
         - UtsushiTests
+        - UtsushiUITests

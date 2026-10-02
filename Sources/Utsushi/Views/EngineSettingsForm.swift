@@ -39,14 +39,14 @@ struct EngineSettingsForm: View {
                     }
                 }
                 if let m = ModelCatalog.whisperModels.first(where: { $0.id == model.settings.whisperModelID }) {
+                    let installed = ModelCatalog.isInstalled(m)
                     HStack {
                         Text(m.note).font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Text(LocalizedStringKey(ModelCatalog.isInstalled(m) ? "導入済み" : "初回実行時にダウンロード"))
-                            .font(.caption2)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background((ModelCatalog.isInstalled(m) ? Color.green : Color.orange).opacity(0.15),
-                                        in: Capsule())
+                        CapsuleBadge(
+                            label: installed ? LocalizedStringKey("導入済み")
+                                             : LocalizedStringKey("初回実行時にダウンロード"),
+                            color: installed ? .green : .orange)
                     }
                 }
             }

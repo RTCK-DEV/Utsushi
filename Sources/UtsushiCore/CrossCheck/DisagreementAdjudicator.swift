@@ -66,6 +66,19 @@ public struct AdjudicationOutcome: Sendable, Codable, Equatable {
     /// 判定にかけずに畳んだ合計。人に残る件数は `undecided - skipped`。
     public var skipped: Int { notationOnly + alignmentOnly + inflectionOnly }
     public init() {}
+
+    /// 並行処理で要素ごとに数えた分を合流させる。`total` は呼び出し側が別に立てる。
+    mutating func merge(_ o: AdjudicationOutcome) {
+        decided += o.decided
+        undecided += o.undecided
+        disagreedBetweenSamples += o.disagreedBetweenSamples
+        errors += o.errors
+        decidedWithMatchingReadings += o.decidedWithMatchingReadings
+        decidedWithDifferentReadings += o.decidedWithDifferentReadings
+        notationOnly += o.notationOnly
+        alignmentOnly += o.alignmentOnly
+        inflectionOnly += o.inflectionOnly
+    }
 }
 
 /// 不一致を LLM に判定させる。
@@ -97,20 +110,7 @@ public final class FoundationModelsJudge: DisagreementJudge, @unchecked Sendable
     }
 
     public func isAvailable() async -> CorrectionAvailability {
-        switch SystemLanguageModel.default.availability {
-        case .available: return .available
-        case .unavailable(let reason): return .unavailable(Self.describe(reason))
-        @unknown default: return .unavailable(String(localized: "未知の理由でモデルが利用できない"))
-        }
-    }
-
-    private static func describe(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
-        switch reason {
-        case .deviceNotEligible: return String(localized: "このMacはApple Intelligenceに対応していない")
-        case .appleIntelligenceNotEnabled: return String(localized: "システム設定でApple Intelligenceが有効になっていない")
-        case .modelNotReady: return String(localized: "モデルのダウンロード/準備が完了していない")
-        @unknown default: return String(localized: "モデルが利用できない")
-        }
+        SystemLanguageModel.default.availability.correctionAvailability
     }
 
     public func judge(_ d: TranscriptAlignment.Disagreement) async throws -> Int? {
@@ -161,62 +161,81 @@ public struct Adjudicator: Sendable {
     }
 
     public func run(on disagreements: [TranscriptAlignment.Disagreement],
-                    progress: (@Sendable (Int, Int) -> Void)? = nil)
+                    progress: (@Sendable (Int, Int) -> Void)? = nil,
+                    isCancelled: @escaping @Sendable () -> Bool = { false })
     async -> ([Adjudication], AdjudicationOutcome) {
         var out: [Adjudication] = []
         var stat = AdjudicationOutcome()
         stat.total = disagreements.count
 
-        for (i, d) in disagreements.enumerated() {
-            progress?(i, disagreements.count)
+        // 1件あたり LLM への往復が大半なので、上限を付けて並行に投げる。
+        // 結果は入力順に畳み込むので判定の並びと統計は直列と同じ。
+        let judged = await BoundedParallel.compactMap(
+            disagreements, concurrency: 4,
+            progress: { progress?($0, disagreements.count) },
+            isCancelled: isCancelled
+        ) { d -> (Adjudication, AdjudicationOutcome)? in
+            if isCancelled() { return nil }
+            var s = AdjudicationOutcome()
             // 中身の違い以外はモデルに投げない。
             // 「三月」と「3月」のどちらが正しいかはモデルに聞く問題ではないし、
             // 整列のずれや語尾のゆれも同じ。実データではこれらが件数の大半を占めるので、
             // 投げると時間だけ食う。記録には `undecided` として残る。
             if !d.kind.needsHumanReview {
-                out.append(undecided(d))
-                stat.undecided += 1
+                s.undecided = 1
                 switch d.kind {
-                case .notation:    stat.notationOnly += 1
-                case .alignment:   stat.alignmentOnly += 1
-                case .inflection:  stat.inflectionOnly += 1
+                case .notation:    s.notationOnly = 1
+                case .alignment:   s.alignmentOnly = 1
+                case .inflection:  s.inflectionOnly = 1
                 case .substantive: break
                 }
-                continue
+                return (self.undecided(d), s)
             }
-            guard let judge else {
-                out.append(undecided(d)); stat.undecided += 1; continue
+            guard let judge = self.judge else {
+                s.undecided = 1
+                return (self.undecided(d), s)
             }
-            if !d.readingsMatch && !judgeDifferentReadings {
-                out.append(undecided(d)); stat.undecided += 1; continue
+            if !d.readingsMatch && !self.judgeDifferentReadings {
+                s.undecided = 1
+                return (self.undecided(d), s)
             }
             do {
+                // 同意確認の2回目は新しいセッションで応答するので並行に投げられる。
+                // 直列だと1件あたり2往復分のレイテンシが乗る。
+                async let secondJ: Int? = {
+                    guard self.requireAgreement else { return nil }
+                    return try await judge.judge(d)
+                }()
                 let first = try await judge.judge(d)
                 var picked = first
-                if requireAgreement {
-                    let second = try await judge.judge(d)
+                if self.requireAgreement {
+                    let second = try await secondJ
                     if second != first {
                         picked = nil
-                        stat.disagreedBetweenSamples += 1
+                        s.disagreedBetweenSamples = 1
                     }
                 }
                 if let picked, picked < d.candidates.count {
                     let c = d.candidates[picked]
-                    out.append(Adjudication(disagreementID: d.id, start: d.start, end: d.end,
-                                            chosenEngine: c.engine, chosenText: c.text,
-                                            candidates: d.candidates,
-                                            readingsMatched: d.readingsMatch,
-                                            agreed: true))
-                    stat.decided += 1
-                    if d.readingsMatch { stat.decidedWithMatchingReadings += 1 }
-                    else { stat.decidedWithDifferentReadings += 1 }
-                } else {
-                    out.append(undecided(d)); stat.undecided += 1
+                    s.decided = 1
+                    if d.readingsMatch { s.decidedWithMatchingReadings = 1 }
+                    else { s.decidedWithDifferentReadings = 1 }
+                    return (Adjudication(disagreementID: d.id, start: d.start, end: d.end,
+                                         chosenEngine: c.engine, chosenText: c.text,
+                                         candidates: d.candidates,
+                                         readingsMatched: d.readingsMatch,
+                                         agreed: true), s)
                 }
+                s.undecided = 1
+                return (self.undecided(d), s)
             } catch {
-                stat.errors += 1
-                out.append(undecided(d))
+                s.errors = 1
+                return (self.undecided(d), s)
             }
+        }
+        for (adj, s) in judged {
+            out.append(adj)
+            stat.merge(s)
         }
         progress?(disagreements.count, disagreements.count)
         return (out, stat)

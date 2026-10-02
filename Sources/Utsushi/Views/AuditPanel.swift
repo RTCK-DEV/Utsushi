@@ -20,7 +20,7 @@ struct AuditPanel: View {
     private var summary: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("ASR検証").font(.headline)
-            grid([
+            StatRows([
                 ("セグメント数", "\(transcript.audit.stats.segmentCount)"),
                 ("本文を破棄した区間", "\(transcript.audit.stats.suppressedCount)"),
                 ("再認識で差し替え", "\(transcript.audit.stats.repairedCount)"),
@@ -50,20 +50,14 @@ struct AuditPanel: View {
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(flags) { f in
                     HStack(alignment: .top, spacing: 8) {
-                        Text(Exporter.hms(f.start))
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                        TimestampLabel(seconds: f.start)
                             .frame(width: 68, alignment: .leading)
                         Text("「\(f.surface)」")
                             .font(.caption).textSelection(.enabled)
                         // 文言は PlausibilityFlag.alternativeNote が持つ（書き出しと同じもの）。
-                        if f.alternative != nil {
-                            Text(f.alternativeNote)
-                                .font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            Text(f.alternativeNote)
-                                .font(.caption2).foregroundStyle(.tertiary)
-                        }
+                        Text(f.alternativeNote)
+                            .font(f.alternative != nil ? .caption : .caption2)
+                            .foregroundStyle(f.alternative != nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                         Spacer(minLength: 0)
                     }
                 }
@@ -87,19 +81,17 @@ struct AuditPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(items) { seg in
                         HStack(alignment: .top, spacing: 8) {
-                            Text(Exporter.hms(seg.start))
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                            TimestampLabel(seconds: seg.start)
                                 .frame(width: 68, alignment: .leading)
                             Text(seg.original)
                                 .font(.caption).foregroundStyle(.secondary)
                                 .strikethrough()
                                 .textSelection(.enabled)
                             Spacer(minLength: 0)
-                            Text(LocalizedStringKey(seg.flags.contains(.repetitionLoop) ? "反復" : "無音"))
-                                .font(.caption2)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Color.red.opacity(0.15), in: Capsule())
+                            CapsuleBadge(
+                                label: seg.flags.contains(.repetitionLoop)
+                                    ? LocalizedStringKey("反復") : LocalizedStringKey("無音"),
+                                color: .red)
                         }
                     }
                 }
@@ -120,7 +112,7 @@ struct AuditPanel: View {
     private func correctionStats(_ o: CorrectionOutcome) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("校正ゲート").font(.headline)
-            grid([
+            StatRows([
                 ("辞書による置換", "\(o.dictionary)"),
                 ("決定論ルール適用", "\(o.deterministic)"),
                 ("LLM提案", "\(o.proposed)"),
@@ -129,7 +121,7 @@ struct AuditPanel: View {
             ])
             if !o.rejected.isEmpty {
                 Text("棄却された提案").font(.subheadline).padding(.top, 4)
-                grid(o.rejected.sorted { $0.value > $1.value }.map { (Self.rejectionLabel($0.key), "\($0.value)") })
+                StatRows(o.rejected.sorted { $0.value > $1.value }.map { (Self.rejectionLabel($0.key), "\($0.value)") })
             }
         }
     }
@@ -150,28 +142,11 @@ struct AuditPanel: View {
                         Text(f.detail).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
-                    Text(actionLabel(f.action)).font(.caption2)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(color(f.action).opacity(0.14), in: Capsule())
+                    CapsuleBadge(label: actionLabel(f.action), color: color(f.action))
                 }
-                .padding(8)
-                .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+                .cardBackground()
             }
         }
-    }
-
-    private func grid(_ rows: [(String, String)]) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(rows, id: \.0) { r in
-                HStack {
-                    Text(LocalizedStringKey(r.0)).font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(r.1).font(.system(.caption, design: .monospaced))
-                }
-            }
-        }
-        .padding(10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func icon(_ a: AuditReport.Finding.Action) -> String {
@@ -190,12 +165,12 @@ struct AuditPanel: View {
         case .unresolved: return .yellow
         }
     }
-    private func actionLabel(_ a: AuditReport.Finding.Action) -> String {
+    private func actionLabel(_ a: AuditReport.Finding.Action) -> LocalizedStringKey {
         switch a {
-        case .suppressed: return String(localized: "破棄")
-        case .repaired: return String(localized: "再認識で修復")
-        case .marked: return String(localized: "印付け")
-        case .unresolved: return String(localized: "未解決")
+        case .suppressed: return "破棄"
+        case .repaired: return "再認識で修復"
+        case .marked: return "印付け"
+        case .unresolved: return "未解決"
         }
     }
     /// 書き出し側の `Exporter.label` と同じ区分を、画面の言語で出す。
@@ -205,21 +180,23 @@ struct AuditPanel: View {
         case .silentHallucination: return String(localized: "無音区間の幻聴")
         case .repetitionLoop: return String(localized: "反復ループ")
         case .densityAnomaly: return String(localized: "取りこぼし疑い")
+        case .densityExcess: return String(localized: "書き過ぎ疑い")
         case .lowConfidence: return String(localized: "低信頼")
         case .coverageGap: return String(localized: "カバレッジの穴")
         case .segmentOverrun: return String(localized: "尺が発話より長い")
         }
     }
-    static func rejectionLabel(_ raw: String) -> String {
+    static func rejectionLabel(_ raw: String) -> LocalizedStringKey {
         switch raw {
-        case "readingChanged": return String(localized: "読みが変わる書き換え")
-        case "lengthOutOfRange": return String(localized: "長さが許容外")
-        case "editDistanceTooLarge": return String(localized: "変更量が大きすぎる")
-        case "readingUnavailable": return String(localized: "読みを取得できず検証不能")
-        case "emptyResult": return String(localized: "空文字にされた")
-        case "newLatinToken": return String(localized: "原文に無い英数字が出現")
-        case "disagreement": return String(localized: "2回の提案が不一致")
-        default: return raw
+        case "readingChanged": return "読みが変わる書き換え"
+        case "lengthOutOfRange": return "長さが許容外"
+        case "editDistanceTooLarge": return "変更量が大きすぎる"
+        case "readingUnavailable": return "読みを取得できず検証不能"
+        case "emptyResult": return "空文字にされた"
+        case "newLatinToken": return "原文に無い英数字が出現"
+        case "disagreement": return "2回の提案が不一致"
+        // 未知の棄却理由は機械キーをそのまま見せる（以前と同じ見え方）
+        default: return LocalizedStringKey(raw)
         }
     }
 }

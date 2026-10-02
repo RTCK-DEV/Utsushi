@@ -91,7 +91,8 @@ public struct AudioExtractor: Sendable {
         if !pending.isEmpty { envelope.append(Self.dbfs(pending)) }
 
         if reader.status == .failed {
-            throw ExtractionError.readerFailed(reader.error?.localizedDescription ?? "不明")
+            throw ExtractionError.readerFailed(reader.error?.localizedDescription
+                                               ?? String(localized: "不明"))
         }
         progress?(1.0)
         let actual = Double(samples.count) / Self.sampleRate

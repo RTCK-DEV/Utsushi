@@ -4,7 +4,7 @@ struct SettingsView: View {
     /// 選択中の表示言語。切り替えても現在の画面には反映されない（起動時に読まれるため）。
     @State private var language = AppLanguage.current
     /// 起動時点の言語。ここへ戻したら再起動の案内を消す。
-    @State private var launchedWith = AppLanguage.current
+    private let launchedWith = AppLanguage.current
     @State private var needsRestart = false
     @EnvironmentObject var model: AppModel
 
@@ -54,8 +54,7 @@ struct SettingsView: View {
                     .font(.caption)
             }
         }
-        .formStyle(.grouped)
-        .padding()
+        .settingsFormStyle()
     }
 
     /// 選択済みでまだ手元に無いモデルの合計。押す前に総量が見えるようにする。
@@ -157,9 +156,7 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .padding()
+        .settingsFormStyle()
     }
 
     private var correctionTab: some View {
@@ -248,14 +245,15 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .padding()
+        .settingsFormStyle()
     }
 }
 
 struct DictionaryEditor: View {
     @EnvironmentObject var model: AppModel
+    /// Table の選択行。削除ボタンは選択中の行を消す。
+    /// 何も選んでいなければ末尾を消す（選択操作を知らなくても追加の直後に戻せる）。
+    @State private var selection = Set<UserDictionary.Entry.ID>()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -271,7 +269,7 @@ struct DictionaryEditor: View {
                  """)
                 .font(.caption).foregroundStyle(.secondary)
 
-            Table(of: Binding<UserDictionary.Entry>.self) {
+            Table(of: Binding<UserDictionary.Entry>.self, selection: $selection) {
                 TableColumn("正しい表記") { $e in TextField("", text: $e.surface) }
                 TableColumn("読み") { $e in TextField("", text: $e.reading) }
                 TableColumn("誤認識されがちな表記（カンマ区切り）") { $e in
@@ -289,7 +287,12 @@ struct DictionaryEditor: View {
             HStack {
                 Button("追加") { model.addDictionaryEntry() }
                 Button("削除") {
-                    if !model.dictionary.entries.isEmpty { model.dictionary.entries.removeLast() }
+                    if !selection.isEmpty {
+                        model.dictionary.entries.removeAll { selection.contains($0.id) }
+                        selection = []
+                    } else if !model.dictionary.entries.isEmpty {
+                        model.dictionary.entries.removeLast()
+                    }
                 }
                 Spacer()
                 Button("保存") { model.saveDictionary() }.buttonStyle(.borderedProminent)

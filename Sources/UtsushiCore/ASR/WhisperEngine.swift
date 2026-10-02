@@ -35,7 +35,7 @@ public actor WhisperEngine: ASREngine {
     /// actor 隔離の外からも解放できるようにロック付きの箱で持つ。
     /// アプリ終了時、ggml の静的デストラクタが Metal デバイスを片付ける前に
     /// whisper_context を解放しておかないと ggml_abort で落ちる（実際に落ちた）。
-    private nonisolated let context = WhisperContextBox()
+    private nonisolated let context = NativeObjectBox(destroy: { whisper_free($0) })
     private var vadPath: String?
 
     public init(model: ModelCatalog.Model = ModelCatalog.whisperModels[0], options: Options = Options()) {
@@ -51,13 +51,13 @@ public actor WhisperEngine: ASREngine {
     public nonisolated var modelIdentifier: String { model.id }
 
     public func prepare(progress: @escaping @Sendable (String, Double) -> Void) async throws {
-        progress("モデルを確認中", 0)
+        progress(String(localized: "モデルを確認中"), 0)
         // 未導入なら実際にはここで数分のダウンロードが走る。
         // 「確認中」のまま止まって見えないよう、開始前にラベルを切り替える。
         let needsDownload = !ModelCatalog.isInstalled(model)
         let label = needsDownload
-            ? "音声認識モデルをダウンロード中（\(ModelCatalog.sizeText(model.approximateBytes))・初回のみ）"
-            : "モデルを確認中"
+            ? String(localized: "音声認識モデルをダウンロード中（\(ModelCatalog.sizeText(model.approximateBytes))・初回のみ）")
+            : String(localized: "モデルを確認中")
         if needsDownload { progress(label, 0.01) }
         _ = try await ModelCatalog.install(model) { p in progress(label, max(0.01, p * 0.95)) }
         _ = try await ModelCatalog.install(ModelCatalog.vadModel) { _ in }
@@ -69,7 +69,7 @@ public actor WhisperEngine: ASREngine {
         vadPath = vad
 
         if context.pointer == nil {
-            progress("モデルを読み込み中", 0.97)
+            progress(String(localized: "モデルを読み込み中"), 0.97)
             var cparams = whisper_context_default_params()
             cparams.use_gpu = true
             cparams.flash_attn = true
@@ -82,13 +82,16 @@ public actor WhisperEngine: ASREngine {
             }
             context.set(c)
         }
-        progress("準備完了", 1.0)
+        progress(String(localized: "準備完了"), 1.0)
     }
 
     public func transcribe(_ request: ASRRequest,
                            progress: @escaping @Sendable (Double) -> Void,
                            isCancelled: @escaping @Sendable () -> Bool) async throws -> [Segment] {
-        guard let ctx = context.pointer else { throw ASRError.engineFailed("prepare() が呼ばれていない") }
+        // acquire した間は終了ハンドラの shutdown() が context を free しない。
+        // whisper_full と結果の回収（collect）の両方をこの区間に入れる。
+        guard let ctx = context.acquire() else { throw ASRError.engineFailed("prepare() が呼ばれていない") }
+        defer { context.release() }
         guard !request.samples.isEmpty else { return [] }
 
         var params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH)
@@ -110,7 +113,7 @@ public actor WhisperEngine: ASREngine {
         // prompt の予算は「ヒント（prompt_past0）を先に取り、残りを持ち越し（prompt_past1）」なので、
         // 予算をヒントのトークン数 + 1 にすると、ヒントだけ残して持ち越しが 0 になる。
         if !request.carryContext {
-            if let hint = request.vocabularyHint, !hint.isEmpty {
+            if let hint = UserDictionary.promptHint(terms: request.vocabularyTerms) {
                 params.n_max_text_ctx = max(1, whisper_token_count(ctx, hint)) + 1
             } else {
                 params.n_max_text_ctx = 0
@@ -188,7 +191,7 @@ public actor WhisperEngine: ASREngine {
             }
 
             // 語彙ヒント。carry_initial_prompt を立てないと先頭30秒にしか効かない。
-            if let hint = request.vocabularyHint, !hint.isEmpty {
+            if let hint = UserDictionary.promptHint(terms: request.vocabularyTerms) {
                 return try hint.withCString { hintPtr -> [Segment] in
                     params.initial_prompt = hintPtr
                     params.carry_initial_prompt = true
@@ -229,30 +232,11 @@ public actor WhisperEngine: ASREngine {
     }
 }
 
-/// whisper_context の所有者。
-/// actor の deinit からは isolated state に触れられず、かつアプリ終了時には
-/// 任意のスレッドから解放したいので、ロック付きのクラスで持つ。
-private final class WhisperContextBox: @unchecked Sendable {
-    private var ptr: OpaquePointer?
-    private let lock = NSLock()
-
-    var pointer: OpaquePointer? {
-        lock.lock(); defer { lock.unlock() }
-        return ptr
-    }
-    func set(_ p: OpaquePointer) {
-        lock.lock()
-        if let old = ptr { whisper_free(old) }
-        ptr = p
-        lock.unlock()
-    }
-    func free() {
-        lock.lock()
-        if let p = ptr { whisper_free(p); ptr = nil }
-        lock.unlock()
-    }
-    deinit { free() }
-}
+/// whisper_context の所有者は NativeObjectBox（ASR層共通）。
+/// 終了時は AppModel が pipeline.cancel() を立ててから shutdown() を呼ぶ。
+/// ただし abort_callback が効いて whisper_full が戻るまでには間があるので、
+/// 解放側は使用中カウントが 0 になるのを待つ。待たないと実行中の C 呼び出しが
+/// 解放済みの context を読んで終了時に落ちる。
 
 /// C コールバックに渡すための箱。actor をまたぐのでクラスにする。
 private final class CallbackBox: @unchecked Sendable {

@@ -31,8 +31,8 @@ public enum AppInfo {
 
     /// 画面に出す版表記。
     public static var displayVersion: String {
-        guard let v = version else { return "版は不明" }
-        if let b = build { return "\(v)（build \(b)）" }
+        guard let v = version else { return String(localized: "版は不明") }
+        if let b = build { return String(localized: "\(v)（build \(b)）") }
         return v
     }
 }
