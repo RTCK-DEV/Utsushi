@@ -188,13 +188,13 @@
         }
       }
     },
-    "github.com/RTCK-reina/Utsushi": {
+    "github.com/RTCK-DEV/Utsushi": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "github.com/RTCK-reina/Utsushi"
+            "value": "github.com/RTCK-DEV/Utsushi"
           }
         }
       }

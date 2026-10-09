@@ -49,8 +49,8 @@ struct SettingsView: View {
             Section("ライセンス") {
                 Text("本体は MIT ライセンスです。実行時に取得するモデルは、それぞれ別のライセンスに従います。")
                     .font(.caption).foregroundStyle(.secondary)
-                Link("github.com/RTCK-reina/Utsushi",
-                     destination: URL(string: "https://github.com/RTCK-reina/Utsushi")!)
+                Link("github.com/RTCK-DEV/Utsushi",
+                     destination: URL(string: "https://github.com/RTCK-DEV/Utsushi")!)
                     .font(.caption)
             }
         }
