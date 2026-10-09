@@ -101,7 +101,7 @@ Utsushi — ローカル完結の文字起こしアプリ（Apple Silicon / macO
   どれだけ落ちるかは開始前に画面に出る。
 
 音声はこの Mac の外に出ない。
-https://github.com/RTCK-reina/Utsushi
+https://github.com/RTCK-DEV/Utsushi
 NOTE
 
     hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" \
